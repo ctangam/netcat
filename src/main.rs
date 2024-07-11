@@ -1,68 +1,90 @@
 use std::path::PathBuf;
 
+use bytes::BytesMut;
 use clap::{Parser, Subcommand};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream, UdpSocket}};
 
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    /// Optional name to operate on
-    name: Option<String>,
 
-    /// Sets a custom config file
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
-
-    /// Turn debugging information on
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    debug: u8,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Parser)]
-enum Commands {
-    /// does testing things
-    #[command(about = "does testing things")]
-    Test {
-        /// lists test values
+#[derive(Parser, Debug)]
+enum Mode {
+    #[command(about = "listen mode")]
+    Listen {
         #[arg(short, long)]
-        list: bool,
+        port: u16,
+
+        #[arg(short, long)]
+        udp: bool,
     },
+
+    #[command(about = "connect mode")]
+    Connect {
+        host: String,
+
+        ports: String,
+    },
+
 }
 
-fn main() {
-    let cli = Commands::parse();
+#[tokio::main]
+async fn main() {
+    let mode = Mode::parse();
+    dbg!(&mode);
 
-    // // You can check the value provided by positional arguments, or option arguments
-    // if let Some(name) = cli.name.as_deref() {
-    //     println!("Value for name: {name}");
-    // }
+    match &mode {
+        Mode::Listen { port, udp } => {
+            if *udp {
+                let server = UdpSocket::bind(format!("0.0.0.0:{}", port)).await.unwrap();
+                
+                let mut buf = BytesMut::with_capacity(1024);
+                loop {
+                    let (len, _) = server.recv_from(&mut buf).await.unwrap();
+                    println!("Received: {}", String::from_utf8_lossy(&buf[..len]));
 
-    // if let Some(config_path) = cli.config.as_deref() {
-    //     println!("Value for config: {}", config_path.display());
-    // }
-
-    // // You can see how many times a particular flag or argument occurred
-    // // Note, only flags can have multiple occurrences
-    // match cli.debug {
-    //     0 => println!("Debug mode is off"),
-    //     1 => println!("Debug mode is kind of on"),
-    //     2 => println!("Debug mode is on"),
-    //     _ => println!("Don't be crazy"),
-    // }
-
-    // You can check for the existence of subcommands, and if found use their
-    // matches just as you would the top level cmd
-    match &cli {
-        Commands::Test { list } => {
-            if *list {
-                println!("Printing testing lists...");
+                    server.send_to(&buf[..len], format!("127.0.0.1:{}", port)).await.unwrap();
+                    buf.clear();
+                }
             } else {
-                println!("Not printing testing lists...");
+                let server = TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
+                let (stream, _) = server.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+
+                let mut buf = BytesMut::with_capacity(1024);
+                loop {
+                    stream.read_buf(&mut buf).await.unwrap();
+
+                    if buf.is_empty() {
+                        break;
+                    }
+
+                    println!("Received: {}", String::from_utf8_lossy(&buf));
+
+                    stream.write(&buf).await.unwrap();
+
+                    buf.clear();
+                }
             }
         }
-        _ => {}
+
+        Mode::Connect { host, ports } => {
+            match ports.split_once('-') {
+                Some((port, "")) => {
+                    let port = port.parse::<u16>().unwrap();
+                    let stream = TcpStream::connect(format!("{}:{}", host, port)).await.unwrap();
+                    println!("Connected to {}:{}", host, port);
+                }
+                Some((start, end)) => {
+                    let start = start.parse::<u16>().unwrap();
+                    let end = end.parse::<u16>().unwrap();
+                    for port in start..=end {
+                        let stream = TcpStream::connect(format!("{}:{}", host, port)).await.unwrap();
+                        println!("Connected to {}:{}", host, port);
+                    }
+                }
+
+                None => {},
+
+            }
+        }
     }
 
     // Continued program logic goes here...

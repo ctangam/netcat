@@ -227,6 +227,7 @@ dependencies = [
 name = "netcat"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "tokio",
 ]
